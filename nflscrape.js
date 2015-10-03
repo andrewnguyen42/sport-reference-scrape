@@ -1,3 +1,5 @@
+var fs = require('fs');
+
 var casper = require('casper').create({
     verbose: true,
     pageSettings: {
@@ -20,9 +22,31 @@ var casper = require('casper').create({
 });
 
 
+var dataType = "rushing"
+
+
+//let's hardcode some constants
+dataTypeSelectorMap = {}
+dataTypeSelectorMap["rushing"] = "#csv_rushing_and_receiving";
+dataTypeSelectorMap["passing"] = "#csv_passing";
+dataTypeSelectorMap["receiving"] = "#csv_receiving";
+
+
+
+//TODO: let people pass in arguments
+if (casper.cli.has("type")) {
+    dataType = casper.cli.get("type")
+
+}
+
+
 //this is the first year we have NFL data from
+//var firstYear = 1932;
+
 var firstYear = 1932;
 var lastYear = 2014;
+
+//var lastYear = 2014;
 
 
 
@@ -33,34 +57,98 @@ var urls = [];
 //ugh I don't want to parse the urls for the year
 var linkYearMap = {}
 for (i = firstYear; i <= lastYear; i++) {
-    urls.push(baseurl + "years/" + i + "/rushing.htm");
+    urls.push(baseurl + "years/" + i + "/" + dataType + ".htm");
     linkYearMap[urls[urls.length - 1]] = i;
 
 }
 
-var csvData = "Rk,,Tm,Age,Pos,G,GS,Att,Yds,TD,Lng,Y/A,Y/G,A/G,Rec,Yds,Y/R,TD,Lng,R/G,Y/G,YScm,RRTD,Fmb \n";
+var csvData = "";
+var foundHeader = false;
+
+var consistentHeader;
 
 casper.start(baseurl, function() {
     this.echo(this.getTitle());
 }).each(urls, function(self, link) {
 
     self.thenOpen(link, function() {
-        this.echo(this.getTitle());
+        this.echo("Scraping data from " + this.getTitle());
 
         this.clickLabel('CSV', 'span');
-        this.waitForSelector('#csv_rushing_and_receiving', function() {
-            var tokens = this.fetchText('#csv_rushing_and_receiving').split('\n');
+        this.waitForSelector(dataTypeSelectorMap[dataType], function() {
+            var tokens = this.fetchText(dataTypeSelectorMap[dataType]).split('\n');
+
+
+            var currentHeader;
+            var hasInconsistentHeader = false;
+            var badIndexes = {};
+
+            for (i = 0; i < tokens.length; i++) {
+                if (tokens[i].substring(0, 4) == 'Rk,,') {
+
+                    currentHeader = tokens[i];
+                    break;
+
+                }
+
+            }
+
+
+            if (!foundHeader) {
+                foundHeader = true;
+                csvData += currentHeader + ', Year \n'
+                consistentHeader = currentHeader.split(',')
+
+            } else {
+                var compareHeader = currentHeader.split(',')
+                    //we know that columns are never dropped
+                if (compareHeader.length > consistentHeader.length) {
+                    hasInconsistentHeader = true;
+                    var offset = 0;
+                    //always use the consistentHeader as a baseline
+                    for (i = 0; i + offset < compareHeader.length; i++) {
+                        if (compareHeader[i + offset] != consistentHeader[i]) {
+                            offset += offset + 1;
+                            badIndexes[i] = true;
+                            casper.echo('INCONSISTENT HEADER: Rectifying...' )
+                        }
+
+                    }
+
+
+                }
+
+
+            }
+
 
             tokens = tokens.filter(function(element) {
                 return !(element.length === 0 || !element.trim()) && element.substring(0, 4) != ',,,,' && element.substring(0, 4) != 'Rk,,'
             })
 
 
-            this.echo(tokens.length)
             tokens.forEach(function(entry, index) {
-                casper.echo(entry);
-                tokens[index] = tokens[index] += "," + linkYearMap[link]
-                casper.echo(tokens[index])
+
+                var dataString = ""
+
+                if (hasInconsistentHeader) {
+                    var data = tokens[index].split(',');
+                    var dataString = ""
+                    for (i = 0; i < data.length; i++) {
+                        if (!badIndexes[i]){
+                            dataString += data[i];
+				if(i!=data.length-1)
+		    			dataString += ','
+			
+			}
+                    }
+
+                } else {
+
+                    dataString = tokens[index]
+                }
+                dataString += ','+ linkYearMap[link] + '\n'
+                csvData += dataString
 
             });
         })
@@ -71,6 +159,7 @@ casper.start(baseurl, function() {
 casper.then(function() {
 
     this.echo(csvData);
+    fs.write(dataType + '.csv', csvData, 'w');
 
 
 })
